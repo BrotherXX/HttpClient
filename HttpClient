@@ -1,0 +1,117 @@
+1、生产实体内容
+HttpClient提供了几个类，用来通过HTTP连接高效地传输内容。这些类的实例均与内含实体请求有关，比如POST和PUT，它们能够把实体内容封装进友好的HTTP请求中。
+对于基本的数据容器String, byte array, input stream, and file，HttpClient为它们提供了几个对应的类：StringEntity, ByteArrayEntity, 
+InputStreamEntity, and FileEntity。
+
+File file = new File("somefile.txt");  
+FileEntity entity = new FileEntity(file,ContentType.create("text/plain", "UTF-8"));  
+HttpPost httppost = new HttpPost("http://localhost/action.do");  
+httppost.setEntity(entity);  
+请注意InputStreamEntity是不可重复的，因为它仅仅能够从数据流中读取一次。一般建议实现一个定制的HttpEntity类来代替使用一般的InputStreamEntity。
+FileEntity将会是一个好的出发点。
+
+2、HTML表单
+许多应用需要模仿一个登陆HTML表单的过程，比如：为了登陆一个web应用或者提交输入的数据。HttpClient提供了UrlEncodedFormEntity类来简化这个过程。
+List<NameValuePair> formparams = new ArrayList<NameValuePair>();
+formparams.add(new BasicNameValuePair("param1", "value1"));
+formparams.add(new BasicNameValuePair("param2", "value2"));
+UrlEncodedFormEntity entity = new UrlEncodedFormEntity(formparams,
+                                                          Consts.UTF_8);
+HttpPost httppost = new HttpPost("http://localhost/handler.do");
+httppost.setEntity(entity);
+UrlEncodedFormEntity实例像上面一样使用URL编码方式来编码参数并生成下面的内容：
+param1=value1&param2=value2
+
+3、相应处理器
+最简单、最方便的方式来处理响应是使用ResponseHandler接口，它包含了一个handleResponse(HttpResponse response)方法。这个方法减轻使用者对于连接管理
+的担心。当你使用ResponseHandler时，无论是请求执行成功亦或出现异常，HttpClient将会自动地确保连接释放回连接管理器中。
+CloseableHttpClient httpclient = HttpClients.createDefault();  
+HttpGet httpget = new HttpGet("http://localhost/json");  
+ResponseHandler<MyJsonObject> rh = new ResponseHandler<MyJsonObject>() {  
+    @Override  
+    public JsonObject handleResponse(final HttpResponse response) throws IOException {  
+        StatusLine statusLine = response.getStatusLine();  
+        HttpEntity entity = response.getEntity();  
+        if (statusLine.getStatusCode() >= 300) {  
+            throw new HttpResponseException(statusLine.getStatusCode(),  
+                statusLine.getReasonPhrase());  
+        }  
+        if (entity == null) {  
+             throw new ClientProtocolException("Response contains no content");  
+        }  
+        Gson gson = new GsonBuilder().create();  
+        ContentType contentType = ContentType.getOrDefault(entity);  
+        Charset charset = contentType.getCharset();  
+        Reader reader = new InputStreamReader(entity.getContent(), charset);  
+        return gson.fromJson(reader, MyJsonObject.class);  
+    }  
+};  
+MyJsonObject myjson = client.execute(httpget, rh);  
+
+4、确保释放低级别的资源
+为了确保正确的释放系统资源，你必须关掉与实体与实体相关的的内容流，还必须关掉响应本身。
+CloseableHttpClient httpclient = HttpClients.createDefault();  
+HttpGet httpget = new HttpGet("http://localhost/");  
+CloseableHttpResponse response = httpclient.execute(httpget);  
+try {  
+     HttpEntity entity = response.getEntity();  
+     if (entity != null) {  
+        InputStream instream = entity.getContent();  
+        try {  
+            // do something useful  
+        } finally {  
+            instream.close();  
+        }  
+   }  
+} finally {  
+     response.close();  
+}  
+关闭内容流和关闭响应的不同点是：前者将会通过消费实体内容保持潜在的连接，而后者迅速的关闭并丢弃连接。
+请注意，一旦实体被HttpEntity#writeTo(OutputStream)方法成功地写入时，也需要确保正确地释放系统资源。如果方法获得通过HttpEntity#getContent()，
+它也需要在一个finally子句中关闭流。
+当使用实体时，你可以使用EntityUtils#consume(HttpEntity)方法来确保实体内容完全被消费并且使潜在的流关闭。
+某些情况，整个响应内容的仅仅一小部分需要被取出，会使消费其他剩余内容的性能代价和连接可重用性代价太高，这时可以通过关闭响应来终止内容流。
+通过下面的例子可以看出，实体输入流仅仅读取了两个字节，就关闭了响应，也就是按需读取，而不是读取全部响应。
+CloseableHttpClient httpclient = HttpClients.createDefault();  
+HttpGet httpget = new HttpGet("http://localhost/");  
+CloseableHttpResponse response = httpclient.execute(httpget);  
+try {  
+HttpEntity entity = response.getEntity();  
+if (entity != null) {  
+        InputStream instream = entity.getContent();  
+    int byteOne = instream.read();  
+        int byteTwo = instream.read();  
+    // Do not need the rest  
+}  
+} finally {  
+    response.close();  
+}  
+这样，连接将不会被重用，它分配的所有级别的资源将会被解除。
+
+5、消费实体内容
+为了消费实体内容，推荐的方式是使用HttpEntity#getContent()或者 HttpEntity#writeTo(OutputStream)方法。HttpClient也提供了一个EntityUtils类，
+它有几个静态方法更容易的从实体中读取内容或信息。取代了直接读取java.io.InputStream，你可以通过这个类的方法取出全部内容体并放入一个String 中或者
+byte数组中。可是，强烈不建议使用EntityUtils，除非响应实体来自于信任的HTTP服务器并且知道它的长度。
+CloseableHttpClient httpclient = HttpClients.createDefault();  
+HttpGet httpget = new HttpGet("http://localhost/");  
+CloseableHttpResponse response = httpclient.execute(httpget);  
+try {  
+HttpEntity entity = response.getEntity();  
+if (entity != null) {  
+        long len = entity.getContentLength();  
+        if (len != -1 && len < 2048) {  
+             System.out.println(EntityUtils.toString(entity));  
+    } else {  
+        // Stream content out  
+    }  
+}  
+} finally {  
+    response.close();  
+}  
+在某些情况下，多次读取实体内容是必要的。在这种情况下，实体内容必须以一些方式缓冲，内存或者硬盘中。为了达到这个目的，最简单的方法是把原始的实体用
+BufferedHttpEntity类包装起来。这将会使原始实体的内容读入一个in-memory缓冲区。所有方式的实体包装都是代表最原始的那个实体。
+CloseableHttpResponse response = <...>  
+HttpEntity entity = response.getEntity();  
+if (entity != null) {  
+    entity = new BufferedHttpEntity(entity);  
+}  
